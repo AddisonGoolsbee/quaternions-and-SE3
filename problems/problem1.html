@@ -20,7 +20,8 @@
 </head>
 <body>
 <script type="module">
-    import {ThreeEngine} from "../js/utils/utils_three.js";
+    import {get_default_lil_gui, ThreeEngine, refresh_displays} from "../js/utils/utils_three.js";
+    import {mul_matrix_matrix, add_matrix_matrix} from "../js/utils/utils_math.js"
 
     // todo: create a visualization that demonstrates your knowledge of displacement-based
     // todo: distance over SE(3).  Note that this will use your logarithm solution from PS_U3,
@@ -68,6 +69,130 @@
 
         return adjugate;
     }
+
+    let engine = ThreeEngine.new_default_3d();
+    
+    let settings = {
+        theta1x: 0,
+        theta1y: 0,
+        theta1z: 0,
+        x1: 0,
+        y1: 0,
+        z1: 0,
+        theta2x: 0,
+        theta2y: 0,
+        theta2z: 0,
+        x2: 0,
+        y2: 0,
+        z2: 0,
+        distance: '0'
+    }
+
+    let actions = {
+        reset1: function() {
+            settings.theta1x = 0
+            settings.theta1y = 0
+            settings.theta1z = 0
+            settings.x1 = 0
+            settings.y1 = 0
+            settings.z1 = 0
+            refresh_displays(gui);
+        },
+        reset2: function() {
+            settings.theta2x = 0
+            settings.theta2y = 0
+            settings.theta2z = 0
+            settings.x2 = 0
+            settings.y2 = 0
+            settings.z2 = 0
+            refresh_displays(gui);
+        }
+    }
+
+    let gui = get_default_lil_gui();
+    gui.add(settings, 'theta1x', -Math.PI, Math.PI).name('Theta 1 1')
+    gui.add(settings, 'theta1y', -Math.PI, Math.PI).name('Theta 1 2')
+    gui.add(settings, 'theta1z', -Math.PI, Math.PI).name('Theta 1 3')
+    gui.add(settings, 'x1', -2.0, 2.0).name('Translation x1')
+    gui.add(settings, 'y1', -2.0, 2.0).name('Translation y1')
+    gui.add(settings, 'z1', -2.0, 2.0).name('Translation z1')
+    gui.add(actions, 'reset1').name('Reset Matrix 1')
+    gui.add(settings, 'theta2x', -Math.PI, Math.PI).name('Theta 2 1')
+    gui.add(settings, 'theta2y', -Math.PI, Math.PI).name('Theta 2 2')
+    gui.add(settings, 'theta2z', -Math.PI, Math.PI).name('Theta 2 3')
+    gui.add(settings, 'x2', -2.0, 2.0).name('Translation x2')
+    gui.add(settings, 'y2', -2.0, 2.0).name('Translation y2')
+    gui.add(settings, 'z2', -2.0, 2.0).name('Translation z2')
+    gui.add(actions, 'reset2').name('Reset Matrix 2')
+    gui.add(settings, 'distance').name('disp based dis').disable()
+
+    const x = [[1], [0], [0]];
+    const y = [[0], [1], [0]];
+    const z = [[0], [0], [1]];
+    const center = [[0], [0], [0]];
+
+    const x_rotation = (theta) => {
+        return [[1, 0, 0], [0, Math.cos(theta), -Math.sin(theta)], [0, Math.sin(theta), Math.cos(theta)]];
+    }
+
+    const y_rotation = (theta) => {
+        return [[Math.cos(theta), 0, Math.sin(theta)], [0, 1, 0], [-Math.sin(theta), 0, Math.cos(theta)]];
+    }
+
+    const z_rotation = (theta) => {
+        return [[Math.cos(theta), -Math.sin(theta), 0], [Math.sin(theta), Math.cos(theta), 0], [0,0,1]];
+    }
+
+    const generate_element = (first) => {
+        let translation = [[first ? settings.x1: settings.x2], [first ? settings.y1 : settings.y2], [first ? settings.z1 : settings.z2]];
+        let rx = x_rotation(first ? settings.theta1x : settings.theta2x);
+        let ry = y_rotation(first ? settings.theta1y : settings.theta2y);
+        let rz = z_rotation(first ? settings.theta1z : settings.theta2z);
+        let m = mul_matrix_matrix(mul_matrix_matrix(rx, ry), rz);
+
+        let debugx = add_matrix_matrix(translation, mul_matrix_matrix(m, x));
+        let debugy = add_matrix_matrix(translation, mul_matrix_matrix(m, y));
+        let debugz = add_matrix_matrix(translation, mul_matrix_matrix(m, z));
+        engine.draw_debug_vector(translation, debugx, 0.035, undefined, first ? 0xff3333 : 0xcc3333);
+        engine.draw_debug_vector(translation, debugy, 0.035, undefined, first ? 0x33ff33 : 0x33cc33);
+        engine.draw_debug_vector(translation, debugz, 0.035, undefined, first ? 0x3333ff : 0x3333cc);
+
+        return m
+    }
+
+    const calculate_distance = (m1, m2) => {
+        // find Rd, the displacement between the two elements (m1^-1 * m2)
+        let m1_inv = numeric.inv(m1)
+        let disp = mul_matrix_matrix(m1_inv, m2)
+
+        // find the natural log of the displacement matrix
+        let a1 = Math.atan2(disp[1][0], disp[0][0])
+        let p, q
+        if (Math.abs(a1) < 0.0001) {
+            p = 1.0 - (Math.pow(a1, 2.0) / 6.0) + (Math.pow(a1, 4.0) / 120.0)
+            q = a1 / 2.0 - (Math.pow(a1, 3.0) / 24.0) + (Math.pow(a1, 5.0) / 720.0)
+        } else {
+            p = Math.sin(a1) / a1
+            q = (1.0 - Math.cos(a1)) / a1
+        }
+        let tx = disp[0][2]
+        let ty = disp[1][2]
+        let a2 = (1.0 / (Math.pow(p, 2) + Math.pow(q, 2))) * (p*tx + q*ty)
+        let a3 = (1.0 / (Math.pow(p, 2) + Math.pow(q, 2))) * (-q*tx + p*ty)
+
+        // skip a few useless steps and find the euclidean distance of a vector made up of a1 a2 and a3
+        let distance = Math.sqrt(a1*a1 + a2*a2 + a3*a3)
+        return distance
+    }
+
+    engine.animation_loop(() => {
+        let m1 = generate_element(true)
+        let m2 = generate_element(false)
+
+        // let dis = calculate_distance(m1, m2)
+        // settings.distance = dis.toFixed(4).toString()
+        refresh_displays(gui)
+    });
 
 
 
